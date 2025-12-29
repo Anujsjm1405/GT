@@ -1,0 +1,289 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <link rel="manifest" href="manifest.json">
+
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="default">
+    <meta name="apple-mobile-web-app-title" content="MedTracker">
+
+    <title>Medical Exam Tracker V5</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+    
+    <style>
+        body { font-family: -apple-system, system-ui, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; margin: 20px; background-color: #f4f7f9; color: #333; }
+        .container { max-width: 1300px; margin: 0 auto; background: #fff; padding: 20px; border-radius: 12px; box-shadow: 0 4px 10px rgba(0,0,0,0.1); }
+        h1 { color: #2c3e50; text-align: center; margin-bottom: 20px; }
+        h2 { color: #555; border-bottom: 2px solid #eee; padding-bottom: 5px; margin-top: 30px; font-size: 1.2rem; }
+        
+        /* INPUTS */
+        .input-form { display: flex; gap: 10px; padding: 15px; border: 1px solid #e1e4e8; border-radius: 12px; background-color: #fafafa; flex-wrap: wrap; }
+        .input-group { display: flex; flex-direction: column; flex-grow: 1; min-width: 90px; }
+        .input-group label { font-size: 0.8em; color: #666; font-weight: 600; margin-bottom: 5px; }
+        input, select { padding: 12px; border: 1px solid #ccc; border-radius: 8px; font-size: 16px; width: 100%; box-sizing: border-box; }
+        
+        /* BUTTONS */
+        .btn-group { display: flex; gap: 10px; margin-top: 10px; width: 100%; }
+        button { flex: 1; padding: 14px; color: white; border: none; border-radius: 8px; font-weight: 600; font-size: 1rem; cursor: pointer; }
+        #add-button { background-color: #007bff; } /* Blue */
+        #undo-button { background-color: #ffc107; color: #333; } /* Yellow */
+        #export-button { background-color: #28a745; } /* Green */
+
+        /* GRAPH & TABLE */
+        #chart-container { width: 100%; height: 400px; margin-top: 20px; }
+        .table-wrapper { overflow-x: auto; margin-top: 20px; border: 1px solid #eee; border-radius: 8px; }
+        table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
+        thead { background-color: #f1f3f5; }
+        th, td { padding: 12px; text-align: center; border-bottom: 1px solid #eee; white-space: nowrap; }
+        th:first-child, td:first-child { text-align: left; }
+
+        /* COLORS */
+        .high-score { color: #28a745; font-weight: 800; }
+        .med-score { color: #fd7e14; font-weight: 800; }
+        .low-score { color: #dc3545; font-weight: 800; }
+        .net-score-col { background-color: #f1f8ff; font-weight: 800; color: #2c3e50; }
+    </style>
+</head>
+<body>
+
+    <script>
+    if ("serviceWorker" in navigator) {
+      navigator.serviceWorker.register("service-worker.js");
+    }
+    </script>
+
+
+    <div class="container">
+        <h1> 🛣️ 🥇Road To 165+🥇 🛣️</h1>
+        
+        <div class="input-form">
+            <div class="input-group" style="min-width: 100%;">
+                <label>Platform</label>
+                <select id="platformSelect" onchange="handlePlatformChange()">
+                    <option value="DAMS">DAMS</option>
+                    <option value="MARROW">MARROW</option>
+                    <option value="CEREBELLUM">CEREBELLUM</option>
+                </select>
+            </div>
+            
+            <div class="input-group" style="min-width: 45%;">
+                <label>Test Name</label>
+                <input type="text" id="testNameInput" placeholder="e.g. GT-5">
+            </div>
+            <div class="input-group" style="min-width: 45%;">
+                <label>Total Qs</label>
+                <input type="number" id="totalQInput" value="200">
+            </div>
+
+            <div class="input-group">
+                <label>Correct (+4)</label>
+                <input type="number" id="correctCountInput" placeholder="0">
+            </div>
+            <div class="input-group">
+                <label>Wrong (-1)</label>
+                <input type="number" id="wrongCountInput" placeholder="0">
+            </div>
+            <div class="input-group">
+                <label>Left (0)</label>
+                <input type="number" id="leftCountInput" placeholder="0">
+            </div>
+            
+            <div class="btn-group">
+                <button id="add-button" onclick="addData()">Add Score</button>
+                <button id="undo-button" onclick="undoLastEntry()">Undo</button>
+            </div>
+            <div class="btn-group">
+                <button id="export-button" onclick="exportToCSV()">Save CSV</button>
+            </div>
+        </div>
+        
+        <h2>📈 Progress Graph</h2>
+        <div id="chart-container">
+            <canvas id="scoreLineChart"></canvas>
+        </div>
+
+        <h2>📋 History (<span id="tablePlatformTitle">DAMS</span>)</h2>
+        <div class="table-wrapper">
+            <table id="dataTable">
+                <thead>
+                    <tr>
+                        <th>Test</th>
+                        <th>C / W / L</th>
+                        <th>Accuracy</th>
+                        <th>Net Score</th>
+                    </tr>
+                </thead>
+                <tbody id="tableBody"></tbody>
+            </table>
+        </div>
+    </div>
+
+    <script>
+        // --- STORAGE KEY ---
+        // We use a new key to ensure clean data structure for V5
+        const STORAGE_KEY = 'medTracker_v5_full'; 
+
+        // --- 1. SETUP & LOAD DATA ---
+        function loadData() {
+            const json = localStorage.getItem(STORAGE_KEY);
+            // Default structure now includes 'left' and 'total' arrays
+            const structure = { labels: [], total: [], correct: [], wrong: [], left: [], scores: [], accuracy: [] };
+            
+            if (json) return JSON.parse(json);
+            return {
+                DAMS: JSON.parse(JSON.stringify(structure)),
+                MARROW: JSON.parse(JSON.stringify(structure)),
+                CEREBELLUM: JSON.parse(JSON.stringify(structure))
+            };
+        }
+        let allData = loadData();
+
+        // --- 2. CHART CONFIGURATION ---
+        let scoreChart;
+        const ctx = document.getElementById('scoreLineChart').getContext('2d');
+        scoreChart = new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: [],
+                datasets: [
+                    { label: 'Correct', data: [], borderColor: '#28a745', backgroundColor: '#28a745', tension: 0.2 },
+                    { label: 'Wrong', data: [], borderColor: '#dc3545', backgroundColor: '#dc3545', tension: 0.2 },
+                    { label: 'Left', data: [], borderColor: '#007bff', backgroundColor: '#007bff', tension: 0.2 }, // Added Blue Line
+                    { label: 'Net Score', data: [], borderColor: '#6610f2', borderDash: [5, 5], tension: 0.2, hidden: true } // Hidden by default
+                ]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                scales: { y: { beginAtZero: true } }
+            }
+        });
+
+        // --- 3. MAIN FUNCTIONS ---
+        function handlePlatformChange() {
+            const platform = document.getElementById('platformSelect').value;
+            const d = allData[platform];
+
+            // A. Update Table
+            const tbody = document.getElementById('tableBody');
+            document.getElementById('tablePlatformTitle').innerText = platform;
+            tbody.innerHTML = '';
+
+            if (d.labels.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="4" style="text-align:center; color:#999; padding:20px;">No data yet.</td></tr>';
+            } else {
+                for (let i = 0; i < d.labels.length; i++) {
+                    const acc = parseFloat(d.accuracy[i]);
+                    const accClass = acc >= 70 ? 'high-score' : (acc >= 50 ? 'med-score' : 'low-score');
+                    
+                    // Handle "Left" data being empty for old entries
+                    const lVal = d.left ? d.left[i] : (d.total[i] - d.correct[i] - d.wrong[i]); 
+
+                    const row = `<tr>
+                        <td><strong>${d.labels[i]}</strong></td>
+                        <td>
+                            <span style="color:#28a745">${d.correct[i]}</span> / 
+                            <span style="color:#dc3545">${d.wrong[i]}</span> / 
+                            <span style="color:#007bff">${lVal}</span>
+                        </td>
+                        <td class="${accClass}">${d.accuracy[i]}%</td>
+                        <td class="net-score-col">${d.scores[i]}</td>
+                    </tr>`;
+                    tbody.innerHTML += row;
+                }
+            }
+
+            // B. Update Graph
+            scoreChart.data.labels = d.labels;
+            scoreChart.data.datasets[0].data = d.correct;
+            scoreChart.data.datasets[1].data = d.wrong;
+            // Safety check: if 'left' data is missing, calculate it, otherwise use stored data
+            scoreChart.data.datasets[2].data = d.left && d.left.length > 0 ? d.left : d.correct.map(() => 0); 
+            scoreChart.data.datasets[3].data = d.scores;
+            scoreChart.update();
+        }
+
+        function addData() {
+            const platform = document.getElementById('platformSelect').value;
+            const name = document.getElementById('testNameInput').value;
+            const total = parseInt(document.getElementById('totalQInput').value);
+            const correct = parseInt(document.getElementById('correctCountInput').value);
+            const wrong = parseInt(document.getElementById('wrongCountInput').value);
+            const left = parseInt(document.getElementById('leftCountInput').value);
+
+            if (!name || isNaN(total) || isNaN(correct) || isNaN(wrong) || isNaN(left)) {
+                alert("⚠️ Please fill all boxes.");
+                return;
+            }
+            if ((correct + wrong + left) !== total) {
+                alert(`⚠️ Counts do not match Total!\n(${correct} + ${wrong} + ${left} = ${correct+wrong+left})`);
+                return;
+            }
+
+            const score = (correct * 4) - (wrong * 1);
+            const attempted = correct + wrong;
+            const accuracy = attempted > 0 ? ((correct / attempted) * 100).toFixed(1) : 0;
+
+            // Push to storage
+            const d = allData[platform];
+            // Initialize arrays if they don't exist (safety)
+            if(!d.left) d.left = [];
+            if(!d.total) d.total = [];
+
+            d.labels.push(name);
+            d.total.push(total);
+            d.correct.push(correct);
+            d.wrong.push(wrong);
+            d.left.push(left); // Saving Left now!
+            d.scores.push(score);
+            d.accuracy.push(accuracy);
+
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(allData));
+            
+            // Clear inputs
+            document.getElementById('testNameInput').value = '';
+            document.getElementById('correctCountInput').value = '';
+            document.getElementById('wrongCountInput').value = '';
+            document.getElementById('leftCountInput').value = '';
+
+            handlePlatformChange();
+            alert("✅ Score Added!");
+        }
+
+        function undoLastEntry() {
+            const platform = document.getElementById('platformSelect').value;
+            const d = allData[platform];
+            if (d.labels.length > 0) {
+                d.labels.pop();
+                d.total.pop();
+                d.correct.pop();
+                d.wrong.pop();
+                if(d.left) d.left.pop(); // Remove Left
+                d.scores.pop();
+                d.accuracy.pop();
+                localStorage.setItem(STORAGE_KEY, JSON.stringify(allData));
+                handlePlatformChange();
+            }
+        }
+
+        function exportToCSV() {
+             const platform = document.getElementById('platformSelect').value;
+             const d = allData[platform];
+             let csv = "Test,Total,Correct,Wrong,Left,Score,Accuracy\n";
+             d.labels.forEach((l, i) => {
+                 const leftVal = d.left ? d.left[i] : 0;
+                 csv += `${l},${d.total[i]},${d.correct[i]},${d.wrong[i]},${leftVal},${d.scores[i]},${d.accuracy[i]}\n`;
+             });
+             const blob = new Blob([csv], { type: 'text/csv' });
+             const url = URL.createObjectURL(blob);
+             const a = document.createElement('a');
+             a.href = url; a.download = `${platform}_Scores.csv`; a.click();
+        }
+
+        window.onload = handlePlatformChange;
+    </script>
+</body>
+</html>
